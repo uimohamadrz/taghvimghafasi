@@ -1,6 +1,7 @@
 # requirements.txt
 
-python-telegram-bot==20.8 # Changed from ~20.X to a specific version 20.8
+python-telegram-bot~=20.8 
 pytz
 Flask
-httpx
+httpx # اگر دیگر از httpx برای هیچ چیز دیگری استفاده نمی‌کنید، می‌توانید آن را حذف کنید.
+redis # اضافه شده
