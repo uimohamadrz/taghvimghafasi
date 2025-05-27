@@ -28,14 +28,33 @@ FALLBACK_GIF_FILE_ID = os.getenv("FALLBACK_GIF_FILE_ID", "AAMCBAADGQECA_NgaDYn12
 TEHRAN_TZ = pytz.timezone('Asia/Tehran')
 
 # --- اتصال به Redis (یک بار در شروع برنامه) ---
+redis_client = None # ابتدا None قرار می‌دهیم
 if REDIS_URL:
-    redis_client = redis.from_url(REDIS_URL)
-    print("Redis client initialized.")
+    try:
+        redis_client = redis.from_url(REDIS_URL)
+        print("Redis client initialized.")
+    except Exception as e:
+        print(f"Error initializing Redis client: {e}")
 else:
-    redis_client = None
     print("Warning: REDIS_URL not set. Redis storage will not be available.")
 
+# --- مقداردهی اولیه Application ربات (فقط یک بار) ---
+# این بخش رو به صورت گلوبال تعریف می‌کنیم و مطمئن می‌شیم فقط یک بار ساخته میشه
+application = None # ابتدا None قرار می‌دهیم
+if TOKEN: # فقط اگر توکن داریم، application رو می‌سازیم
+    try:
+        application = Application.builder().token(TOKEN).build()
+        application.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, channel_post_handler))
+        application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, group_message_handler))
+        print("Telegram Application handlers added.")
+    except Exception as e:
+        print(f"Error initializing Telegram Application: {e}")
+else:
+    print("Error: TELEGRAM_BOT_TOKEN not set. Telegram Application cannot be initialized.")
+
+
 # --- توابع برای ذخیره و بازیابی File ID و Message ID گیف با Redis ---
+# ... (این توابع بدون تغییر می‌مانند) ...
 async def save_gif_info(file_id: str, message_id: int):
     """File ID و Message ID گیف را در Redis ذخیره می‌کند."""
     if not redis_client:
@@ -73,36 +92,31 @@ async def load_gif_info() -> tuple[str, int] | None:
         print(f"خطا در بارگذاری از Redis: {e}")
     return None
 
+
 # --- هندلر برای پیام‌های جدید در کانال (برای ذخیره گیف روزانه) ---
+# ... (این تابع بدون تغییر می‌ماند) ...
 async def channel_post_handler(update: Update, context: CallbackContext) -> None:
     message = update.channel_post 
 
-    # اطمینان حاصل می‌کنیم که پیام از کانال مورد نظر و دارای محتواست
     if not message or message.chat.id != CHANNEL_ID:
-        #print(f"Message from different channel or no message: {message.chat.id if message else 'None'} vs {CHANNEL_ID}")
         return
 
-    # زمان پیام را به وقت تهران تبدیل می‌کنیم
     message_time_tehran = message.date.astimezone(TEHRAN_TZ)
     current_time_tehran = datetime.datetime.now(TEHRAN_TZ)
 
-    # بررسی می‌کنیم که پیام مربوط به امروز باشد و در بازه 00:00 تا 00:01 قرار گرفته باشد
     if (message_time_tehran.date() == current_time_tehran.date() and
         message_time_tehran.hour == 0 and
         message_time_tehran.minute >= 0 and message_time_tehran.minute <= 1):
         
         file_id_to_save = None
-        if message.animation: # اگر پیام گیف باشد
+        if message.animation: 
             file_id_to_save = message.animation.file_id
-        elif message.video: # اگر پیام ویدیو باشد (می‌تواند جایگزین گیف شود)
+        elif message.video: 
             file_id_to_save = message.video.file_id
 
         if file_id_to_save:
-            # فقط در صورتی ذخیره کن که قبلا برای امروز ذخیره نشده باشد
-            # این کمک می‌کند که "اولین" گیف در بازه ذخیره شود و نه هر گیفی که بعداً بیاید.
-            # اگر قبلاً ذخیره شده باشد، load_gif_info چیزی برمی‌گرداند.
             existing_gif_info = await load_gif_info() 
-            if existing_gif_info is None: # فقط اگر هنوز گیفی برای امروز ثبت نشده
+            if existing_gif_info is None: 
                 await save_gif_info(file_id_to_save, message.message_id)
                 print(f"New media from channel saved at {message_time_tehran.strftime('%H:%M')}.")
             else:
@@ -113,6 +127,7 @@ async def channel_post_handler(update: Update, context: CallbackContext) -> None
         print(f"Message from channel, but outside the specified time range: {message_time_tehran.strftime('%H:%M')}")
 
 # --- هندلر برای پاسخ به دستور "امروز چندمه؟" در گروه‌ها ---
+# ... (این تابع بدون تغییر می‌ماند) ...
 async def group_message_handler(update: Update, context: CallbackContext) -> None:
     message = update.message
 
@@ -120,37 +135,31 @@ async def group_message_handler(update: Update, context: CallbackContext) -> Non
         print("Command received outside of a group.") 
         return
 
-    # --- خط جدید برای عیب‌یابی (موقتاً): ببین پیام تو چه شکلی به ربات میرسه ---
     if message.text:
         print(f"Received text (raw): {message.text}")
         print(f"Type of received text: {type(message.text)}")
-    # ----------------------------------------------------------------------
 
     if message.text and ("امروز چندمه" in message.text or "امروز چه روزیه" in message.text):
         print(f"Command '{message.text}' received in group {message.chat.title}.")
-        stored_gif_info = await load_gif_info() # سعی می‌کنیم گیف ذخیره شده برای امروز رو از Redis بگیریم
+        stored_gif_info = await load_gif_info() 
 
         if stored_gif_info:
             file_id, message_id_to_forward = stored_gif_info
             try:
-                # فوروارد کردن گیف اصلی از کانال
-                # این کار نیاز به CHANNEL_ID و Message ID پیام اصلی در کانال داره
                 await context.bot.forward_message(
-                    chat_id=message.chat.id,         # شناسه چت گروهی که دستور در آن صادر شده است
-                    from_chat_id=CHANNEL_ID,         # شناسه کانالی که گیف از آن فوروارد می‌شود
-                    message_id=message_id_to_forward # شناسه پیام گیف در کانال
+                    chat_id=message.chat.id,         
+                    from_chat_id=CHANNEL_ID,         
+                    message_id=message_id_to_forward 
                 )
                 print(f"Original GIF from channel forwarded to group {message.chat.title}.")
             except Exception as e:
-                # اگر فوروارد کردن به هر دلیلی با مشکل مواجه شد (مثلاً پیام از کانال حذف شده بود)
                 print(f"Error forwarding original GIF (Message ID: {message_id_to_forward}): {e}. Sending fallback GIF.")
                 await context.bot.send_animation(
-                    chat_id=message.chat_id,
+                    chat_id=message.chat.id,
                     animation=FALLBACK_GIF_FILE_ID,
                     caption="متاسفانه گیف امروز پیدا نشد یا قابل فوروارد نبود، این گیف پیش‌فرض است."
                 )
         else:
-            # اگر هیچ گیفی برای امروز در Redis ذخیره نشده بود، گیف پیش‌فرض را می‌فرستیم
             print("No GIF saved for today in Redis. Sending fallback GIF.")
             await context.bot.send_animation(
                 chat_id=message.chat.id,
@@ -164,18 +173,24 @@ async def group_message_handler(update: Update, context: CallbackContext) -> Non
 # --- Setup Flask application for Webhook ---
 app = Flask(__name__)
 
-# Initialize the Telegram bot Application
-application = Application.builder().token(TOKEN).build()
-# اضافه کردن channel_post_handler برای گوش دادن به پیام‌های کانال
-application.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, channel_post_handler))
-application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, group_message_handler)) # تغییر اینجا: filters.GROUP به filters.ChatType.GROUPS
-
 # Webhook entry point
 @app.route("/api/bot", methods=["POST"])
 async def telegram_webhook():
-    if not application:
-        print("Error: Bot Application not initialized.")
-        return jsonify({"status": "Bot not initialized"}), 500
+    # این خطوط رو تغییر دادیم تا application فقط یک بار ساخته بشه
+    global application # برای دسترسی به متغیر گلوبال application
+    if application is None: # اگر هنوز ساخته نشده، بسازش
+        if TOKEN:
+            try:
+                application = Application.builder().token(TOKEN).build()
+                application.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, channel_post_handler))
+                application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, group_message_handler))
+                print("Telegram Application initialized and handlers added (on first request).")
+            except Exception as e:
+                print(f"Error initializing Telegram Application on first request: {e}")
+                return jsonify({"status": "error", "message": "Bot initialization failed"}), 500
+        else:
+            print("Error: TELEGRAM_BOT_TOKEN not set. Cannot initialize Telegram Application.")
+            return jsonify({"status": "error", "message": "Bot token missing"}), 500
 
     try:
         req_body = request.get_json(force=True)
@@ -186,3 +201,4 @@ async def telegram_webhook():
     except Exception as e:
         print(f"Error processing Webhook: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
