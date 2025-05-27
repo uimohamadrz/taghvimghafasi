@@ -136,7 +136,7 @@ async def group_message_handler(update: Update, context: CallbackContext) -> Non
                 # فوروارد کردن گیف اصلی از کانال
                 # این کار نیاز به CHANNEL_ID و Message ID پیام اصلی در کانال داره
                 await context.bot.forward_message(
-                    chat_id=message.chat_id,         # شناسه چت گروهی که دستور در آن صادر شده است
+                    chat_id=message.chat.id,         # شناسه چت گروهی که دستور در آن صادر شده است
                     from_chat_id=CHANNEL_ID,         # شناسه کانالی که گیف از آن فوروارد می‌شود
                     message_id=message_id_to_forward # شناسه پیام گیف در کانال
                 )
@@ -153,7 +153,7 @@ async def group_message_handler(update: Update, context: CallbackContext) -> Non
             # اگر هیچ گیفی برای امروز در Redis ذخیره نشده بود، گیف پیش‌فرض را می‌فرستیم
             print("No GIF saved for today in Redis. Sending fallback GIF.")
             await context.bot.send_animation(
-                chat_id=message.chat_id,
+                chat_id=message.chat.id,
                 animation=FALLBACK_GIF_FILE_ID,
                 caption="امروز گیفی در بازه 00:00 تا 00:01 در کانال پیدا نشد، این گیف پیش‌فرض است."
             )
@@ -168,7 +168,7 @@ app = Flask(__name__)
 application = Application.builder().token(TOKEN).build()
 # اضافه کردن channel_post_handler برای گوش دادن به پیام‌های کانال
 application.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, channel_post_handler))
-application.add_handler(MessageHandler(filters.TEXT & filters.GROUP, group_message_handler))
+application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, group_message_handler)) # تغییر اینجا: filters.GROUP به filters.ChatType.GROUPS
 
 # Webhook entry point
 @app.route("/", methods=["POST"])
