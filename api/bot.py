@@ -171,7 +171,7 @@ application.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, channel_
 application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, group_message_handler)) # تغییر اینجا: filters.GROUP به filters.ChatType.GROUPS
 
 # Webhook entry point
-@app.route("/", methods=["POST"])
+@app.route("/api/bot", methods=["POST"])
 async def telegram_webhook():
     if not application:
         print("Error: Bot Application not initialized.")
