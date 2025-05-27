@@ -12,17 +12,17 @@ import redis.asyncio as redis # برای Redis
 from flask import Flask, request, jsonify # برای Webhook
 
 # --- پیکربندی ---
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") 
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "5992329338:AAFeMzENjcxAATji5mpDcgLNZg7VjfFfv9U") 
 
 # آدرس اتصال به Redis: باید به عنوان متغیر محیطی در Vercel تنظیم شود.
 REDIS_URL = os.getenv("REDIS_URL") 
 
 # شناسه کانال مبدا (taghvimghafasi): باید به عنوان متغیر محیطی در Vercel تنظیم شود.
 # این رو برای فوروارد کردن پیام از کانال نیاز داریم.
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1001234567890")) 
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1001886988651")) 
 
 # File ID گیف پیش‌فرض: باید به عنوان متغیر محیطی در Vercel تنظیم شود.
-FALLBACK_GIF_FILE_ID = os.getenv("FALLBACK_GIF_FILE_ID", "BAACAgIAAxkBA...")
+FALLBACK_GIF_FILE_ID = os.getenv("FALLBACK_GIF_FILE_ID", "AAMCBAADGQECA_NgaDYn12DAX8o5DZdL_PjivicNsPQAApMYAAISe7lRlJGAmFWt294BAAdtAAM2BA")
 
 # منطقه زمانی تهران
 TEHRAN_TZ = pytz.timezone('Asia/Tehran')
