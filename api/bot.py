@@ -1,31 +1,33 @@
+# api/bot.py
+
+from telegram import Update
+from telegram.ext import Application, MessageHandler, filters, CallbackContext
 import datetime
 import os
 import re
 import pytz
 import json
-import redis.asyncio as redis # استفاده از redis.asyncio برای پشتیبانی از await/async
+import redis.asyncio as redis # برای Redis
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify # برای Webhook
 
 # --- پیکربندی ---
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") 
 
 # آدرس اتصال به Redis: باید به عنوان متغیر محیطی در Vercel تنظیم شود.
-# این معمولاً یک URL است که از ارائه‌دهنده Redis (مثلاً Upstash) دریافت می‌کنید.
 REDIS_URL = os.getenv("REDIS_URL") 
 
-# شناسه کانال مبدا
+# شناسه کانال مبدا (taghvimghafasi): باید به عنوان متغیر محیطی در Vercel تنظیم شود.
+# این رو برای فوروارد کردن پیام از کانال نیاز داریم.
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1001234567890")) 
 
-# File ID گیف پیش‌فرض
+# File ID گیف پیش‌فرض: باید به عنوان متغیر محیطی در Vercel تنظیم شود.
 FALLBACK_GIF_FILE_ID = os.getenv("FALLBACK_GIF_FILE_ID", "BAACAgIAAxkBA...")
 
 # منطقه زمانی تهران
 TEHRAN_TZ = pytz.timezone('Asia/Tehran')
 
 # --- اتصال به Redis (یک بار در شروع برنامه) ---
-# این اتصال باید در سطح گلوبال تعریف شود تا در تمام توابع قابل دسترسی باشد.
-# از pool_prefill برای افزایش کارایی در محیط Serverless استفاده می‌شود.
 if REDIS_URL:
     redis_client = redis.from_url(REDIS_URL)
     print("Redis client initialized.")
@@ -33,7 +35,7 @@ else:
     redis_client = None
     print("Warning: REDIS_URL not set. Redis storage will not be available.")
 
-# --- توابع برای ذخیره و بازیابی File ID گیف با Redis ---
+# --- توابع برای ذخیره و بازیابی File ID و Message ID گیف با Redis ---
 async def save_gif_info(file_id: str, message_id: int):
     """File ID و Message ID گیف را در Redis ذخیره می‌کند."""
     if not redis_client:
@@ -44,12 +46,11 @@ async def save_gif_info(file_id: str, message_id: int):
     value = json.dumps({"file_id": file_id, "message_id": message_id}) # ذخیره به صورت رشته JSON
     
     try:
-        await redis_client.set(key, value)
-        # می‌توانید یک TTL (زمان انقضا) هم برای کلید تنظیم کنید تا مثلاً بعد از چند روز حذف شود.
-        # await redis_client.expire(key, 60 * 60 * 24 * 7) # مثال: انقضا بعد از 7 روز
-        print(f"گیف با File ID: {file_id} و Message ID: {message_id} در Redis برای کلید {key} ذخیره شد.")
+        # ذخیره با زمان انقضا (TTL) 7 روز برای پاکسازی خودکار
+        await redis_client.set(key, value, ex=60 * 60 * 24 * 7) 
+        print(f"GIF with File ID: {file_id} and Message ID: {message_id} saved to Redis for key {key}.")
     except Exception as e:
-        print(f"خطا در ذخیره در Redis: {e}")
+        print(f"Error saving to Redis: {e}")
 
 async def load_gif_info() -> tuple[str, int] | None:
     """File ID و Message ID گیف را از Redis برای امروز بازیابی می‌کند."""
@@ -72,34 +73,46 @@ async def load_gif_info() -> tuple[str, int] | None:
         print(f"خطا در بارگذاری از Redis: {e}")
     return None
 
-# --- Telegram Bot Handlers ---
+# --- هندلر برای پیام‌های جدید در کانال (برای ذخیره گیف روزانه) ---
 async def channel_post_handler(update: Update, context: CallbackContext) -> None:
     message = update.channel_post 
 
+    # اطمینان حاصل می‌کنیم که پیام از کانال مورد نظر و دارای محتواست
     if not message or message.chat.id != CHANNEL_ID:
+        #print(f"Message from different channel or no message: {message.chat.id if message else 'None'} vs {CHANNEL_ID}")
         return
 
+    # زمان پیام را به وقت تهران تبدیل می‌کنیم
     message_time_tehran = message.date.astimezone(TEHRAN_TZ)
     current_time_tehran = datetime.datetime.now(TEHRAN_TZ)
 
+    # بررسی می‌کنیم که پیام مربوط به امروز باشد و در بازه 00:00 تا 00:01 قرار گرفته باشد
     if (message_time_tehran.date() == current_time_tehran.date() and
         message_time_tehran.hour == 0 and
         message_time_tehran.minute >= 0 and message_time_tehran.minute <= 1):
         
         file_id_to_save = None
-        if message.animation:
+        if message.animation: # اگر پیام گیف باشد
             file_id_to_save = message.animation.file_id
-        elif message.video: 
+        elif message.video: # اگر پیام ویدیو باشد (می‌تواند جایگزین گیف شود)
             file_id_to_save = message.video.file_id
 
         if file_id_to_save:
-            await save_gif_info(file_id_to_save, message.message_id)
-            print(f"New media saved from channel at {message_time_tehran.strftime('%H:%M')}.")
+            # فقط در صورتی ذخیره کن که قبلا برای امروز ذخیره نشده باشد
+            # این کمک می‌کند که "اولین" گیف در بازه ذخیره شود و نه هر گیفی که بعداً بیاید.
+            # اگر قبلاً ذخیره شده باشد، load_gif_info چیزی برمی‌گرداند.
+            existing_gif_info = await load_gif_info() 
+            if existing_gif_info is None: # فقط اگر هنوز گیفی برای امروز ثبت نشده
+                await save_gif_info(file_id_to_save, message.message_id)
+                print(f"New media from channel saved at {message_time_tehran.strftime('%H:%M')}.")
+            else:
+                print(f"GIF already saved for today ({existing_gif_info[0]}). Skipping new save.")
         else:
             print(f"Message was within the time range, but neither GIF nor video: {message_time_tehran.strftime('%H:%M')}")
     else:
         print(f"Message from channel, but outside the specified time range: {message_time_tehran.strftime('%H:%M')}")
 
+# --- هندلر برای پاسخ به دستور "امروز چندمه؟" در گروه‌ها ---
 async def group_message_handler(update: Update, context: CallbackContext) -> None:
     message = update.message
 
@@ -107,20 +120,29 @@ async def group_message_handler(update: Update, context: CallbackContext) -> Non
         print("Command received outside of a group.") 
         return
 
+    # --- خط جدید برای عیب‌یابی (موقتاً): ببین پیام تو چه شکلی به ربات میرسه ---
+    if message.text:
+        print(f"Received text (raw): {message.text}")
+        print(f"Type of received text: {type(message.text)}")
+    # ----------------------------------------------------------------------
+
     if message.text and ("امروز چندمه" in message.text or "امروز چه روزیه" in message.text):
         print(f"Command '{message.text}' received in group {message.chat.title}.")
-        stored_gif_info = await load_gif_info()
+        stored_gif_info = await load_gif_info() # سعی می‌کنیم گیف ذخیره شده برای امروز رو از Redis بگیریم
 
         if stored_gif_info:
             file_id, message_id_to_forward = stored_gif_info
             try:
+                # فوروارد کردن گیف اصلی از کانال
+                # این کار نیاز به CHANNEL_ID و Message ID پیام اصلی در کانال داره
                 await context.bot.forward_message(
-                    chat_id=message.chat_id,         
-                    from_chat_id=CHANNEL_ID,         
-                    message_id=message_id_to_forward 
+                    chat_id=message.chat_id,         # شناسه چت گروهی که دستور در آن صادر شده است
+                    from_chat_id=CHANNEL_ID,         # شناسه کانالی که گیف از آن فوروارد می‌شود
+                    message_id=message_id_to_forward # شناسه پیام گیف در کانال
                 )
-                print(f"Original GIF forwarded to group {message.chat.title}.")
+                print(f"Original GIF from channel forwarded to group {message.chat.title}.")
             except Exception as e:
+                # اگر فوروارد کردن به هر دلیلی با مشکل مواجه شد (مثلاً پیام از کانال حذف شده بود)
                 print(f"Error forwarding original GIF (Message ID: {message_id_to_forward}): {e}. Sending fallback GIF.")
                 await context.bot.send_animation(
                     chat_id=message.chat_id,
@@ -128,7 +150,8 @@ async def group_message_handler(update: Update, context: CallbackContext) -> Non
                     caption="متاسفانه گیف امروز پیدا نشد یا قابل فوروارد نبود، این گیف پیش‌فرض است."
                 )
         else:
-            print("No GIF saved for today. Sending fallback GIF.")
+            # اگر هیچ گیفی برای امروز در Redis ذخیره نشده بود، گیف پیش‌فرض را می‌فرستیم
+            print("No GIF saved for today in Redis. Sending fallback GIF.")
             await context.bot.send_animation(
                 chat_id=message.chat_id,
                 animation=FALLBACK_GIF_FILE_ID,
@@ -143,6 +166,7 @@ app = Flask(__name__)
 
 # Initialize the Telegram bot Application
 application = Application.builder().token(TOKEN).build()
+# اضافه کردن channel_post_handler برای گوش دادن به پیام‌های کانال
 application.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, channel_post_handler))
 application.add_handler(MessageHandler(filters.TEXT & filters.GROUP, group_message_handler))
 
@@ -162,4 +186,3 @@ async def telegram_webhook():
     except Exception as e:
         print(f"Error processing Webhook: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
-
