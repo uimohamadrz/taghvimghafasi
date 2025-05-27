@@ -1,4 +1,6 @@
-python-telegram-bot~=20.X # مثلاً python-telegram-bot==20.8
+# requirements.txt
+
+python-telegram-bot==20.8 # Changed from ~20.X to a specific version 20.8
 pytz
 Flask
 httpx
