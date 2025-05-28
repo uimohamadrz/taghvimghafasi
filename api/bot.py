@@ -7,18 +7,19 @@ import os
 import re
 import pytz
 import json
-import redis.asyncio as redis # برای Redis
+import redis.asyncio as redis 
 
-from flask import Flask, request, jsonify # برای Webhook
+from flask import Flask, request, jsonify 
 
 # --- پیکربندی ---
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "5992329338:AAFeMzENjcxAATji5mpDcgLNZg7VjfFfv9U") 
+# توکن ربات: همچنان توصیه می‌شود به عنوان متغیر محیطی تنظیم شود.
+# اگرچه می‌توانید مقدار پیش‌فرض را برای تست محلی نگه دارید، اما برای Production توصیه نمی‌شود.
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") 
 
 # آدرس اتصال به Redis: باید به عنوان متغیر محیطی در Vercel تنظیم شود.
 REDIS_URL = os.getenv("REDIS_URL") 
 
 # شناسه کانال مبدا (taghvimghafasi): باید به عنوان متغیر محیطی در Vercel تنظیم شود.
-# این رو برای فوروارد کردن پیام از کانال نیاز داریم.
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-1001886988651")) 
 
 # File ID گیف پیش‌فرض: باید به عنوان متغیر محیطی در Vercel تنظیم شود.
@@ -27,45 +28,44 @@ FALLBACK_GIF_FILE_ID = os.getenv("FALLBACK_GIF_FILE_ID", "AAMCBAADGQECA_NgaDYn12
 # منطقه زمانی تهران
 TEHRAN_TZ = pytz.timezone('Asia/Tehran')
 
-# --- اتصال به Redis (یک بار در شروع برنامه) ---
-redis_client = None # ابتدا None قرار می‌دهیم
+# --- اتصال به Redis (یک بار در شروع برنامه - گلوبال) ---
+# این بخش یک بار وقتی ماژول بارگذاری می‌شود اجرا می‌شود
+redis_client = None 
 if REDIS_URL:
     try:
         redis_client = redis.from_url(REDIS_URL)
         print("Redis client initialized.")
     except Exception as e:
-        print(f"Error initializing Redis client: {e}")
+        print(f"Error initializing Redis client globally: {e}")
 else:
     print("Warning: REDIS_URL not set. Redis storage will not be available.")
 
-# --- مقداردهی اولیه Application ربات (فقط یک بار) ---
-# این بخش رو به صورت گلوبال تعریف می‌کنیم و مطمئن می‌شیم فقط یک بار ساخته میشه
-application = None # ابتدا None قرار می‌دهیم
-if TOKEN: # فقط اگر توکن داریم، application رو می‌سازیم
+# --- Telegram Application (مقداردهی اولیه گلوبال و فقط یک بار) ---
+# این بخش هم یک بار وقتی ماژول بارگذاری می‌شود اجرا می‌شود
+application = None 
+if TOKEN: 
     try:
         application = Application.builder().token(TOKEN).build()
-        application.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, channel_post_handler))
-        application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, group_message_handler))
-        print("Telegram Application handlers added.")
+        print("Telegram Application builder called.") # لاگ برای دیباگ
     except Exception as e:
-        print(f"Error initializing Telegram Application: {e}")
+        print(f"Error building Telegram Application globally: {e}")
+        # اگر در اینجا خطا بدهد، application = None باقی می‌ماند
 else:
-    print("Error: TELEGRAM_BOT_TOKEN not set. Telegram Application cannot be initialized.")
+    print("Error: TELEGRAM_BOT_TOKEN not set. Telegram Application cannot be built globally.")
 
 
 # --- توابع برای ذخیره و بازیابی File ID و Message ID گیف با Redis ---
-# ... (این توابع بدون تغییر می‌مانند) ...
+# (این توابع بدون تغییر می‌مانند)
 async def save_gif_info(file_id: str, message_id: int):
     """File ID و Message ID گیف را در Redis ذخیره می‌کند."""
     if not redis_client:
         print("Error: Redis client is not initialized. Cannot save GIF info.")
         return
 
-    key = datetime.date.today().isoformat() # کلید برای گیف امروز (مثال: "2023-10-27")
-    value = json.dumps({"file_id": file_id, "message_id": message_id}) # ذخیره به صورت رشته JSON
+    key = datetime.date.today().isoformat() 
+    value = json.dumps({"file_id": file_id, "message_id": message_id}) 
     
     try:
-        # ذخیره با زمان انقضا (TTL) 7 روز برای پاکسازی خودکار
         await redis_client.set(key, value, ex=60 * 60 * 24 * 7) 
         print(f"GIF with File ID: {file_id} and Message ID: {message_id} saved to Redis for key {key}.")
     except Exception as e:
@@ -82,19 +82,18 @@ async def load_gif_info() -> tuple[str, int] | None:
     try:
         value = await redis_client.get(key)
         if value:
-            gif_data = json.loads(value) # از رشته JSON به دیکشنری تبدیل می‌کنیم
+            gif_data = json.loads(value) 
             print(f"اطلاعات گیف از Redis برای کلید {key} بارگذاری شد.")
             return gif_data.get("file_id"), gif_data.get("message_id")
         
         print(f"هیچ اطلاعات گیف معتبری در Redis برای کلید {key} امروز پیدا نشد.")
         return None
     except Exception as e:
-        print(f"خطا در بارگذاری از Redis: {e}")
+        print(f"Error loading from Redis: {e}")
     return None
 
-
 # --- هندلر برای پیام‌های جدید در کانال (برای ذخیره گیف روزانه) ---
-# ... (این تابع بدون تغییر می‌ماند) ...
+# (این تابع بدون تغییر می‌ماند)
 async def channel_post_handler(update: Update, context: CallbackContext) -> None:
     message = update.channel_post 
 
@@ -127,7 +126,7 @@ async def channel_post_handler(update: Update, context: CallbackContext) -> None
         print(f"Message from channel, but outside the specified time range: {message_time_tehran.strftime('%H:%M')}")
 
 # --- هندلر برای پاسخ به دستور "امروز چندمه؟" در گروه‌ها ---
-# ... (این تابع بدون تغییر می‌ماند) ...
+# (این تابع بدون تغییر می‌ماند)
 async def group_message_handler(update: Update, context: CallbackContext) -> None:
     message = update.message
 
@@ -176,21 +175,10 @@ app = Flask(__name__)
 # Webhook entry point
 @app.route("/api/bot", methods=["POST"])
 async def telegram_webhook():
-    # این خطوط رو تغییر دادیم تا application فقط یک بار ساخته بشه
-    global application # برای دسترسی به متغیر گلوبال application
-    if application is None: # اگر هنوز ساخته نشده، بسازش
-        if TOKEN:
-            try:
-                application = Application.builder().token(TOKEN).build()
-                application.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, channel_post_handler))
-                application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, group_message_handler))
-                print("Telegram Application initialized and handlers added (on first request).")
-            except Exception as e:
-                print(f"Error initializing Telegram Application on first request: {e}")
-                return jsonify({"status": "error", "message": "Bot initialization failed"}), 500
-        else:
-            print("Error: TELEGRAM_BOT_TOKEN not set. Cannot initialize Telegram Application.")
-            return jsonify({"status": "error", "message": "Bot token missing"}), 500
+    # اینجا application از سطح گلوبال استفاده می‌شود
+    if application is None:
+        print("Error: Telegram Application was not initialized globally. Check TOKEN environment variable.")
+        return jsonify({"status": "error", "message": "Bot application not initialized"}), 500
 
     try:
         req_body = request.get_json(force=True)
