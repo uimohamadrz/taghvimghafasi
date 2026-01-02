@@ -1,0 +1,15 @@
+services:
+  calendar-bot:
+    build: .
+    container_name: calendar_bot
+    restart: unless-stopped
+    environment:
+      - BOT_TOKEN=5992329338:AAFeMzENjcxAATji5mpDcgLNZg7VjfFfv9U
+#      - CHANNEL_ID=@taghvimghafasi
+      - CHANNEL_ID=@tin10ghaf
+      - ADMIN_ID=639766385
+      - SCHEDULE_TIME=20:30
+      - TZ=UTC
+#    volumes:
+      # Optional: Mount gifs folder if you want to update gifs without rebuilding
+      #- ./gifs:/app/gifs
