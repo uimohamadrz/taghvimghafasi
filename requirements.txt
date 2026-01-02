@@ -1,7 +1,0 @@
-# requirements.txt
-
-python-telegram-bot~=20.8 
-pytz
-Flask[async]
-httpx # اگر دیگر از httpx برای هیچ چیز دیگری استفاده نمی‌کنید، می‌توانید آن را حذف کنید.
-redis # اضافه شده
